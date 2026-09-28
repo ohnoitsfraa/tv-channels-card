@@ -9,6 +9,15 @@ A Home Assistant dashboard card for watching IPTV: channel tiles in tabs, one HL
 - **Theme-aware**: it uses your theme's colours in light and dark mode, and has one configurable accent colour.
 - **English and Dutch** texts, following your Home Assistant language.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ohnoitsfraa/tv-channels-card/main/images/playing.png" alt="Watching RTL 4: programme guide with the current show, its description and what's up next, above the channel tiles" width="720">
+</p>
+
+<details>
+<summary>Idle state, before picking a channel</summary>
+<p align="center"><img src="https://raw.githubusercontent.com/ohnoitsfraa/tv-channels-card/main/images/overview.png" alt="Idle player with channel tiles showing what's on now" width="560"></p>
+</details>
+
 ## Requirements
 
 - The [IPTV Proxy](https://github.com/ohnoitsfraa/iptv_proxy) integration, recommended for https, logos and the guide. Alternatively, direct HLS URLs (see `source_hls` below).
