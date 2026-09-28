@@ -10,12 +10,12 @@ A Home Assistant dashboard card for watching IPTV: channel tiles in tabs, one HL
 - **English and Dutch** texts, following your Home Assistant language.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ohnoitsfraa/tv-channels-card/main/images/playing.png" alt="Watching RTL 4: programme guide with the current show, its description and what's up next, above the channel tiles" width="720">
+  <img src="https://github.com/ohnoitsfraa/tv-channels-card/blob/main/images/playing.png?raw=true" alt="Watching RTL 4: programme guide with the current show, its description and what's up next, above the channel tiles" width="720">
 </p>
 
 <details>
 <summary>Idle state, before picking a channel</summary>
-<p align="center"><img src="https://raw.githubusercontent.com/ohnoitsfraa/tv-channels-card/main/images/overview.png" alt="Idle player with channel tiles showing what's on now" width="560"></p>
+<p align="center"><img src="https://github.com/ohnoitsfraa/tv-channels-card/blob/main/images/overview.png?raw=true" alt="Idle player with channel tiles showing what's on now" width="560"></p>
 </details>
 
 ## Requirements
