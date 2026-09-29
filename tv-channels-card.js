@@ -1,6 +1,6 @@
 // tv-channels-card: IPTV channel tiles, an HLS player and a programme guide for Home Assistant.
 // Works with the iptv_proxy integration (https://github.com/ohnoitsfraa/iptv_proxy).
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 const I18N = {
   en: {
@@ -9,6 +9,8 @@ const I18N = {
     blockedText: 'This channel is served over http. Open Home Assistant via its local http address, or allow <code>Insecure content</code> for this site in Chrome.',
     noProxy: 'could not get access to the proxy', noHls: 'hls.js could not be loaded',
     unsupported: 'HLS is not supported in this browser', unavailable: 'stream unavailable',
+    search: 'Search', searchPh: 'Search channels or programmes…', resChannels: 'Channels', resProgrammes: 'Programmes',
+    noResults: 'Nothing found', searching: 'Searching…', live: 'Live', today: 'Today',
   },
   nl: {
     now: 'Nu', stop: 'Stop', pick: 'Kies een kanaal', next: 'Straks', channels: 'Kanalen',
@@ -16,6 +18,8 @@ const I18N = {
     blockedText: 'Dit kanaal komt via http binnen. Open Home Assistant via het lokale http-adres, of sta in Chrome <code>Onveilige content</code> toe voor deze site.',
     noProxy: 'kon geen toegang tot de proxy krijgen', noHls: 'hls.js kon niet geladen worden',
     unsupported: 'HLS niet ondersteund in deze browser', unavailable: 'stream niet beschikbaar',
+    search: 'Zoeken', searchPh: 'Zoek zenders of programma’s…', resChannels: 'Zenders', resProgrammes: 'Programma’s',
+    noResults: 'Niets gevonden', searching: 'Zoeken…', live: 'Live', today: 'Vandaag',
   },
 };
 
@@ -97,14 +101,18 @@ class TvChannelsCard extends HTMLElement {
     return res.path;
   }
 
+  async _signLogo(l) {
+    this._logos = this._logos || {};
+    if (!(l in this._logos)) {
+      try { this._logos[l] = await this._sign(`${this._config.proxy}/logo?u=${encodeURIComponent(l)}`, 7 * 86400); } catch (e) { this._logos[l] = ''; }
+    }
+    return this._logos[l];
+  }
+
   async _signLogos() {
     this._logosRequested = true;
     const logos = [...new Set(this._config.channels.map((c) => c.logo).filter(Boolean))];
-    const out = {};
-    await Promise.all(logos.map(async (l) => {
-      try { out[l] = await this._sign(`${this._config.proxy}/logo?u=${encodeURIComponent(l)}`, 7 * 86400); } catch (e) { /* show name instead */ }
-    }));
-    this._logos = out;
+    await Promise.all(logos.map((l) => this._signLogo(l)));
     if (this._built) this._render();
   }
 
@@ -176,6 +184,81 @@ class TvChannelsCard extends HTMLElement {
       + (next.length ? `<div class="gnext"><span class="lbl">${this._t('next')}</span>${next.map((p) => `<div class="gi"><span class="gtime">${this._fmt(p.start)}</span><span class="gn">${this._esc(p.title)}</span></div>`).join('')}</div>` : '');
   }
 
+  // search: provider channels by name (GET <proxy>/streams) and programmes in the configured channels' guide (GET <proxy>/search)
+  _toggleSearch(open) {
+    const box = this.querySelector('.search');
+    this._searchOpen = open ?? !this._searchOpen;
+    box.hidden = !this._searchOpen;
+    this.querySelector('.find').classList.toggle('on', this._searchOpen);
+    if (!this._searchOpen) return;
+    const input = box.querySelector('input');
+    input.focus();
+    input.select();
+    if (this._epgOn() && !(this._warmAt > Date.now() - 600000)) {
+      this._warmAt = Date.now(); // fill the server's guide cache so the first search is quick
+      this._hass.callApi('GET', `${this._apiBase()}/search?ids=${this._searchIds()}`).catch(() => {});
+    }
+  }
+
+  _searchIds() { return [...new Set(this._config.channels.map((c) => c.id))].join(','); }
+
+  async _search(q) {
+    const token = (this._searchToken = (this._searchToken || 0) + 1);
+    const out = this.querySelector('.results');
+    q = q.trim();
+    if (q.length < 2) { out.innerHTML = ''; return; }
+    out.innerHTML = `<div class="rmsg">${this._t('searching')}</div>`;
+    const enc = encodeURIComponent(q);
+    const [chans, progs] = await Promise.all([
+      this._hass.callApi('GET', `${this._apiBase()}/streams?q=${enc}&limit=24`).catch(() => []),
+      this._epgOn() ? this._hass.callApi('GET', `${this._apiBase()}/search?q=${enc}&ids=${this._searchIds()}`).catch(() => []) : [],
+    ]);
+    if (token !== this._searchToken) return;
+    this._results = { chans: chans || [], progs: progs || [] };
+    this._paintResults();
+  }
+
+  _day(ts) {
+    const d = new Date(ts * 1000);
+    if (d.toDateString() === new Date().toDateString()) return this._t('today');
+    return d.toLocaleDateString(this._lang() === 'nl' ? 'nl-NL' : undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  }
+
+  _paintResults() {
+    const out = this.querySelector('.results');
+    const { chans, progs } = this._results || { chans: [], progs: [] };
+    if (!chans.length && !progs.length) { out.innerHTML = `<div class="rmsg">${this._t('noResults')}</div>`; return; }
+    const byId = Object.fromEntries(this._config.channels.map((c) => [c.id, c]));
+    out.innerHTML = (chans.length ? `<div class="rsec"><span class="lbl">${this._t('resChannels')}</span>${chans.map((c, i) => `
+        <button class="ri" data-k="c${i}"><span class="rlogo">${c.logo ? `<img alt="" data-logo="${this._esc(c.logo)}" referrerpolicy="no-referrer">` : ''}</span>
+          <span class="rt"><span class="rn">${this._esc(c.name)}</span><span class="rs">${this._esc(c.group)}</span></span></button>`).join('')}</div>` : '')
+      + (progs.length ? `<div class="rsec"><span class="lbl">${this._t('resProgrammes')}</span>${progs.map((p, i) => {
+        const ch = byId[p.id];
+        return `<button class="ri${p.live ? '' : ' later'}" data-k="p${i}"${p.live ? '' : ' disabled'}>
+          <span class="rwhen">${p.live ? `<span class="rlive">${this._t('live')}</span>` : `<span>${this._esc(this._day(p.start))}</span>`}<span class="gtime">${this._fmt(p.start)}</span></span>
+          <span class="rt"><span class="rn">${this._esc(p.title)}</span><span class="rs">${this._esc(ch ? ch.name : p.id)}</span></span></button>`;
+      }).join('')}</div>` : '');
+    out.querySelectorAll('img[data-logo]').forEach(async (img) => {
+      const src = await this._signLogo(img.dataset.logo);
+      if (src) img.src = src; else img.remove();
+    });
+  }
+
+  _pickResult(k) {
+    const { chans, progs } = this._results || {};
+    let ch = null;
+    if (k[0] === 'c' && chans) {
+      const c = chans[+k.slice(1)];
+      ch = c && (this._config.channels.find((x) => x.id === c.id) || { id: c.id, name: c.name, logo: c.logo });
+    } else if (k[0] === 'p' && progs) {
+      const p = progs[+k.slice(1)];
+      ch = p && p.live ? this._config.channels.find((x) => x.id === p.id) : null;
+    }
+    if (!ch) return;
+    this._toggleSearch(false);
+    this._play(ch);
+  }
+
   _build() {
     this._built = true;
     const a = this._config.accent;
@@ -241,20 +324,66 @@ class TvChannelsCard extends HTMLElement {
         .gnext .lbl { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--secondary-text-color); }
         .gi { display: flex; gap: 10px; min-width: 0; font-size: 12.5px; }
         .gi .gn { color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .btn.find { padding: 7px 9px; }
+        .btn.find.on { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 16%, transparent); }
+        .search { display: flex; flex-direction: column; gap: 10px; }
+        .search[hidden] { display: none; }
+        .search input { width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 10px 14px; border-radius: 14px; outline: none;
+          color: var(--primary-text-color); background: var(--card-background-color);
+          border: 1px solid color-mix(in srgb, var(--primary-text-color) 14%, transparent); }
+        .search input:focus { border-color: var(--acc); }
+        .results { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; max-height: 360px; overflow-y: auto; }
+        .rsec { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .rsec .lbl { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+          color: var(--secondary-text-color); margin-bottom: 2px; }
+        .rmsg { font-size: 13px; color: var(--secondary-text-color); padding: 4px 2px; }
+        .ri { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 8px; border-radius: 12px; border: 1px solid transparent;
+          background: transparent; color: var(--primary-text-color); font: inherit; text-align: left; cursor: pointer; }
+        .ri:hover:not([disabled]) { border-color: color-mix(in srgb, var(--primary-text-color) 14%, transparent); }
+        .ri.later { cursor: default; opacity: .6; }
+        .rlogo { flex: none; width: 48px; aspect-ratio: 16 / 10; border-radius: 6px; display: flex; align-items: center; justify-content: center; overflow: hidden;
+          background: color-mix(in srgb, #fff 88%, var(--card-background-color)); }
+        .rlogo img { max-width: 80%; max-height: 74%; object-fit: contain; }
+        .rwhen { flex: none; width: 70px; display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--secondary-text-color); }
+        .rlive { color: #f43f5e; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; font-size: 10px; }
+        .rt { display: flex; flex-direction: column; min-width: 0; }
+        .rn { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .rs { font-size: 11px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       </style>
       <div class="tv">
         <div class="screen"><div class="idle"></div></div>
         <div class="bar">
           <div class="now"><span class="dot"></span><span class="lbl">${this._t('now')}</span><span class="nm">—</span></div>
+          ${this._config.proxy ? `<button class="btn find" title="${this._t('search')}" aria-label="${this._t('search')}"><ha-icon icon="mdi:magnify"></ha-icon></button>` : ''}
           <button class="btn stop" hidden><ha-icon icon="mdi:stop"></ha-icon>${this._t('stop')}</button>
         </div>
         <div class="guide" hidden></div>
+        <div class="search" hidden>
+          <input type="search" placeholder="${this._t('searchPh')}" autocomplete="off" enterkeyhint="search">
+          <div class="results"></div>
+        </div>
         <div class="tabs"></div>
         <div class="grid"></div>
       </div>`;
     this._screen = this.querySelector('.screen');
     this._idle = this.querySelector('.idle');
     this.querySelector('.stop').addEventListener('click', () => this._stop());
+    if (this._config.proxy) {
+      this.querySelector('.find').addEventListener('click', () => this._toggleSearch());
+      const input = this.querySelector('.search input');
+      input.addEventListener('input', () => {
+        clearTimeout(this._searchTimer);
+        this._searchTimer = setTimeout(() => this._search(input.value), 350);
+      });
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') this._toggleSearch(false);
+        if (ev.key === 'Enter') { clearTimeout(this._searchTimer); this._search(input.value); }
+      });
+      this.querySelector('.results').addEventListener('click', (ev) => {
+        const r = ev.target.closest('.ri');
+        if (r && !r.disabled) this._pickResult(r.dataset.k);
+      });
+    }
     this.querySelector('.tabs').addEventListener('click', (ev) => {
       const t = ev.target.closest('.tab');
       if (!t) return;
@@ -279,7 +408,7 @@ class TvChannelsCard extends HTMLElement {
       .filter(({ c }) => (c.group || fallback) === this._group)
       .map(({ c, i }) => {
         const src = this._logoSrc(c);
-        return `<button class="ch ${this._current === c ? 'on' : ''}" data-i="${i}">
+        return `<button class="ch ${this._current && this._current.id === c.id ? 'on' : ''}" data-i="${i}">
           <span class="logo">${src ? `<img src="${this._esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}<span class="fb"${src ? ' hidden' : ''}>${this._esc(c.name)}</span></span>
           <span class="nm">${this._esc(c.name)}</span><span class="pg" hidden><span class="pt"></span><b><i></i></b></span></button>`;
       }).join('');
@@ -299,7 +428,7 @@ class TvChannelsCard extends HTMLElement {
   }
 
   _play(ch) {
-    if (!ch || (this._current === ch && this._player)) return;
+    if (!ch || (this._current && this._current.id === ch.id && this._player)) return;
     this._stop(true);
     this._playHls(ch);
   }

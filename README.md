@@ -5,6 +5,7 @@ A Home Assistant dashboard card for watching IPTV: channel tiles in tabs, one HL
 - **Channel tiles** with logos, grouped in tabs (e.g. `NL`, `BE`, `Sport`). The last tab you used is remembered.
 - **One player**: hls.js, or native HLS on Safari/iOS. Only one stream runs at a time, which helps with provider connection limits.
 - **Programme guide**: what's on now with a progress bar on every tile, and the current programme, its description and the next three programmes below the player.
+- **Search**: the magnifier button searches all of your provider's channels by name and the guide of your configured channels by programme title. Tap a channel, or a programme that's on now, to start watching. Needs IPTV Proxy 1.2.0 or newer.
 - **Stops by itself** when the pop-up it lives in closes, or when the card leaves the page.
 - **Theme-aware**: it uses your theme's colours in light and dark mode, and has one configurable accent colour.
 - **English and Dutch** texts, following your Home Assistant language.
@@ -85,7 +86,7 @@ cards:
 
 ## Finding stream ids
 
-Stream ids come from your provider's Xtream API (`player_api.php?username=…&password=…&action=get_live_streams`, together with `get_live_categories` for the group names), or from an IPTV app that shows them. Keep your credentials out of shared configs. With the proxy, the card never needs them.
+With IPTV Proxy 1.2.0 or newer, run the `iptv_proxy.find_channels` action in **Developer tools → Actions** (for example `query: de zdf`). It returns the `id`, `name`, `group` and `logo` you need for a channel entry. Otherwise, stream ids come from your provider's Xtream API (`player_api.php?username=…&password=…&action=get_live_streams`, together with `get_live_categories` for the group names), or from an IPTV app that shows them. Keep your credentials out of shared configs. With the proxy, the card never needs them.
 
 ## Notes
 
