@@ -1,6 +1,6 @@
 // tv-channels-card: IPTV channel tiles, an HLS player and a programme guide for Home Assistant.
 // Works with the iptv_proxy integration (https://github.com/ohnoitsfraa/iptv_proxy).
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 
 const I18N = {
   en: {
@@ -104,7 +104,10 @@ class TvChannelsCard extends HTMLElement {
   async _signLogo(l) {
     this._logos = this._logos || {};
     if (!(l in this._logos)) {
-      try { this._logos[l] = await this._sign(`${this._config.proxy}/logo?u=${encodeURIComponent(l)}`, 7 * 86400); } catch (e) { this._logos[l] = ''; }
+      // some providers hand out already percent-encoded logo URLs; encoding those twice breaks the path signature
+      let u = l;
+      try { u = decodeURI(l); } catch (e) { /* keep as is */ }
+      try { this._logos[l] = await this._sign(`${this._config.proxy}/logo?u=${encodeURIComponent(u)}`, 7 * 86400); } catch (e) { this._logos[l] = ''; }
     }
     return this._logos[l];
   }
