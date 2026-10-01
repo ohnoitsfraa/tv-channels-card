@@ -1,6 +1,6 @@
 // tv-channels-card: IPTV channel tiles, an HLS player and a programme guide for Home Assistant.
 // Works with the iptv_proxy integration (https://github.com/ohnoitsfraa/iptv_proxy).
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 
 const I18N = {
   en: {
@@ -12,6 +12,7 @@ const I18N = {
     search: 'Search', searchPh: 'Search channels, programmes, movies or series…', resChannels: 'Channels', resProgrammes: 'Programmes',
     resMovies: 'Movies', resSeries: 'Series', back: 'Back', season: 'Season', loadingEps: 'Loading episodes…',
     subs: 'Subtitles', subsOff: 'Subtitles off', min: 'min', results: 'Results', loadingLib: 'Loading movies and series…',
+    audio: 'Audio', unmute: 'Tap for sound', play: 'Play', pause: 'Pause', mute: 'Mute', fullscreen: 'Fullscreen',
     noResults: 'Nothing found', searching: 'Searching…', live: 'Live', today: 'Today',
   },
   nl: {
@@ -23,6 +24,7 @@ const I18N = {
     search: 'Zoeken', searchPh: 'Zoek zenders, programma’s, films of series…', resChannels: 'Zenders', resProgrammes: 'Programma’s',
     resMovies: 'Films', resSeries: 'Series', back: 'Terug', season: 'Seizoen', loadingEps: 'Afleveringen laden…',
     subs: 'Ondertitels', subsOff: 'Ondertitels uit', min: 'min', results: 'Zoekresultaten', loadingLib: 'Films en series laden…',
+    audio: 'Audio', unmute: 'Tik voor geluid', play: 'Afspelen', pause: 'Pauzeren', mute: 'Dempen', fullscreen: 'Volledig scherm',
     noResults: 'Niets gevonden', searching: 'Zoeken…', live: 'Live', today: 'Vandaag',
   },
 };
@@ -460,6 +462,16 @@ class TvChannelsCard extends HTMLElement {
         @media (max-width: 420px) { .toresults .bl { display: none; } .toresults { padding: 7px 9px; } }
         .ccw select { position: absolute; inset: 0; opacity: 0; cursor: pointer; font: inherit; }
         .ccw.on { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 16%, transparent); }
+        .unmute { position: absolute; top: 12px; left: 12px; z-index: 2; background: rgba(0,0,0,.65); color: #fff; border-color: rgba(255,255,255,.25); }
+        .rx { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 18px 12px 10px;
+          background: linear-gradient(transparent, rgba(0,0,0,.75)); color: #fff; }
+        .rxb { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 10px;
+          background: transparent; color: #fff; cursor: pointer; flex: none; }
+        .rxb:hover { background: rgba(255,255,255,.12); }
+        .rxb ha-icon { --mdc-icon-size: 22px; }
+        .rxt { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; white-space: nowrap; flex: none; }
+        .rxs { flex: 1; min-width: 0; accent-color: var(--acc); }
+        :fullscreen .rx { padding-bottom: 18px; }
       </style>
       <div class="tv">
         <div class="screen"><div class="idle"></div></div>
@@ -467,7 +479,8 @@ class TvChannelsCard extends HTMLElement {
           <div class="now"><span class="dot"></span><span class="lbl">${this._t('now')}</span><span class="nm">—</span></div>
           ${this._config.proxy ? `<button class="btn toresults" hidden title="${this._t('results')}"><ha-icon icon="mdi:arrow-left"></ha-icon><span class="bl">${this._t('results')}</span></button>` : ''}
           ${this._config.proxy ? `<button class="btn find" title="${this._t('search')}" aria-label="${this._t('search')}"><ha-icon icon="mdi:magnify"></ha-icon></button>` : ''}
-          <label class="btn ccw" hidden title="${this._t('subs')}"><ha-icon icon="mdi:subtitles-outline"></ha-icon><select class="cc" aria-label="${this._t('subs')}"></select></label>
+          <label class="btn ccw auw" hidden title="${this._t('audio')}"><ha-icon icon="mdi:account-voice"></ha-icon><select class="au" aria-label="${this._t('audio')}"></select></label>
+          <label class="btn ccw cct" hidden title="${this._t('subs')}"><ha-icon icon="mdi:subtitles-outline"></ha-icon><select class="cc" aria-label="${this._t('subs')}"></select></label>
           <button class="btn stop" hidden><ha-icon icon="mdi:stop"></ha-icon>${this._t('stop')}</button>
         </div>
         <div class="guide" hidden></div>
@@ -482,6 +495,7 @@ class TvChannelsCard extends HTMLElement {
     this._idle = this.querySelector('.idle');
     this.querySelector('.stop').addEventListener('click', () => this._stop());
     this.querySelector('.cc').addEventListener('change', (ev) => this._pickSub(ev.target.value, true));
+    this.querySelector('.au').addEventListener('change', (ev) => { if (this._remux) this._remuxLoad(this._remuxPos(), +ev.target.value); });
     if (this._config.proxy) {
       this.querySelector('.find').addEventListener('click', () => this._toggleSearch());
       this.querySelector('.toresults').addEventListener('click', () => this._toggleSearch(true, false));
@@ -546,6 +560,23 @@ class TvChannelsCard extends HTMLElement {
     this._idle.innerHTML = `<ha-icon icon="mdi:television-classic"></ha-icon><span class="t">${this._t('pick')}</span>`;
   }
 
+  _start(video) {
+    video.play().catch(() => {
+      video.muted = true;
+      video.play().then(() => this._showUnmute(video)).catch(() => {});
+    });
+  }
+
+  _showUnmute(video) {
+    if (video !== this._player || this._screen.querySelector('.unmute')) return;
+    const b = document.createElement('button');
+    b.className = 'btn unmute';
+    b.innerHTML = `<ha-icon icon="mdi:volume-off"></ha-icon>${this._t('unmute')}`;
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); video.muted = false; b.remove(); this._paintRemux(); });
+    video.addEventListener('volumechange', () => { if (!video.muted) b.remove(); });
+    this._screen.appendChild(b);
+  }
+
   _play(ch) {
     if (!ch || (this._current && this._current.id === ch.id && this._player)) return;
     this._stop(true);
@@ -583,7 +614,7 @@ class TvChannelsCard extends HTMLElement {
         : `<ha-icon icon="mdi:alert-outline"></ha-icon><span class="t">${this._t('failed')}</span><span>${this._esc(reason || '')}</span>`;
     };
     if (!url) { fail(this._t('noProxy')); return; }
-    const start = () => video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+    const start = () => this._start(video);
 
     if (video.canPlayType('application/vnd.apple.mpegurl') && !window.MediaSource) {
       video.src = url; // Safari / iOS native HLS
@@ -624,6 +655,9 @@ class TvChannelsCard extends HTMLElement {
     this._current = cur;
     this._render();
 
+    const api = `${this._apiBase()}/vod/${item.kind}/${encodeURIComponent(item.id)}`;
+    // the probe tells whether the browser can decode the audio (Dolby/DTS in MKV plays silently otherwise)
+    const probeReq = this._hass.callApi('GET', `${api}.probe?ext=${encodeURIComponent(item.ext || 'mp4')}`).catch(() => null);
     let info = item.info || null;
     if (!info && item.kind === 'movie') {
       try { info = await this._hass.callApi('GET', `${this._apiBase()}/movie/${encodeURIComponent(item.id)}`); } catch (e) { info = null; }
@@ -631,9 +665,16 @@ class TvChannelsCard extends HTMLElement {
       if (info) { cur.vod = { ...cur.vod, ...info, title: info.name || item.name }; this._paintGuide(); }
     }
     const ext = (info && info.ext) || item.ext || 'mp4';
+    let probe = await probeReq;
+    if (token !== this._hlsToken) return;
+    if (probe && (probe.error || ext !== (item.ext || 'mp4'))) probe = null; // failed, or probed the wrong file type
     const base = `${this._config.proxy}/vod/${item.kind}/${encodeURIComponent(item.id)}`;
     const native = ['mp4', 'm4v', 'webm', 'mov'].includes(ext);
-    const order = native ? ['file', 'hls'] : ['hls', 'file'];
+    let order;
+    if (!probe) order = native ? ['file', 'hls'] : ['hls', 'file'];
+    else if (!probe.browser_audio) order = ['hls', 'remux', 'file'];
+    else order = native ? ['file', 'hls', 'remux'] : ['hls', 'file', 'remux'];
+    this._remux = null;
 
     for (const sub of (info && info.subtitles) || []) {
       try {
@@ -656,11 +697,19 @@ class TvChannelsCard extends HTMLElement {
       this._idle.hidden = false;
       this._idle.innerHTML = `<ha-icon icon="mdi:alert-outline"></ha-icon><span class="t">${this._t('failed')}</span><span>${this._esc(reason || '')}</span>`;
     };
-    const start = () => video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+    const start = () => this._start(video);
     const tryNext = async (i, lastReason) => {
       if (token !== this._hlsToken) return;
       if (i >= order.length) { fail(lastReason || this._t('unavailable')); return; }
       if (this._hls) { try { this._hls.destroy(); } catch (e) { /* gone */ } this._hls = null; }
+      if (order[i] === 'remux') {
+        this._remux = { base, ext, offset: 0, audio: 0, duration: (probe && probe.seconds) || 0, tracks: (probe && probe.audio) || [], token };
+        video.controls = false;
+        video.addEventListener('error', () => { if (this._remux && this._remux.token === token) { this._remux = null; video.controls = true; this._paintRemux(); tryNext(i + 1, this._t('unavailable')); } }, { once: true });
+        this._buildRemuxUi(video);
+        this._remuxLoad(0, 0);
+        return;
+      }
       let url;
       try { url = await this._sign(`${base}.${order[i] === 'hls' ? 'm3u8' : ext}`, 12 * 3600); } catch (e) { fail(this._t('noProxy')); return; }
       if (token !== this._hlsToken) return;
@@ -696,6 +745,87 @@ class TvChannelsCard extends HTMLElement {
     tryNext(0);
   }
 
+  // remuxed films (audio converted on the server) can't be seeked by Range: seeking restarts the stream at a new position
+  async _remuxLoad(t, audio) {
+    const r = this._remux;
+    const v = this._player;
+    if (!r || !v) return;
+    let url;
+    try { url = await this._sign(`${r.base}.remux?ext=${encodeURIComponent(r.ext)}&t=${Math.floor(t)}&a=${audio}`, 12 * 3600); } catch (e) { return; }
+    if (this._remux !== r) return;
+    Object.assign(r, { offset: Math.floor(t), audio });
+    v.src = url;
+    this._start(v);
+    this._paintRemux();
+    this._paintAudio();
+  }
+
+  _remuxPos() { return this._remux && this._player ? this._remux.offset + (this._player.currentTime || 0) : 0; }
+
+  _clock(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(s).padStart(2, '0')}`;
+  }
+
+  _buildRemuxUi(video) {
+    const ui = document.createElement('div');
+    ui.className = 'rx';
+    ui.innerHTML = `<button class="rxb rxp" aria-label="${this._t('pause')}"><ha-icon icon="mdi:pause"></ha-icon></button>
+      <span class="rxt">0:00</span><input class="rxs" type="range" min="0" step="1" value="0" aria-label="${this._t('play')}">
+      <span class="rxt rxd"></span>
+      <button class="rxb rxm" aria-label="${this._t('mute')}"><ha-icon icon="mdi:volume-high"></ha-icon></button>
+      <button class="rxb rxf" aria-label="${this._t('fullscreen')}"><ha-icon icon="mdi:fullscreen"></ha-icon></button>`;
+    this._screen.appendChild(ui);
+    const slider = ui.querySelector('.rxs');
+    ui.querySelector('.rxp').addEventListener('click', () => (video.paused ? this._start(video) : video.pause()));
+    ui.querySelector('.rxm').addEventListener('click', () => { video.muted = !video.muted; });
+    ui.querySelector('.rxf').addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (this._screen.requestFullscreen) this._screen.requestFullscreen().catch(() => {});
+      else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+    });
+    slider.addEventListener('input', () => { this._seeking = true; ui.querySelector('.rxt').textContent = this._clock(+slider.value); });
+    slider.addEventListener('change', () => { this._seeking = false; this._remuxLoad(+slider.value, this._remux ? this._remux.audio : 0); });
+    video.addEventListener('click', () => (video.paused ? this._start(video) : video.pause()));
+    ['timeupdate', 'play', 'pause', 'volumechange', 'durationchange'].forEach((e) => video.addEventListener(e, () => this._paintRemux()));
+    this._paintRemux();
+  }
+
+  _paintRemux() {
+    const ui = this._screen && this._screen.querySelector('.rx');
+    if (!ui) return;
+    const r = this._remux;
+    const v = this._player;
+    if (!r || !v) { ui.remove(); return; }
+    const dur = r.duration || 0;
+    const slider = ui.querySelector('.rxs');
+    slider.max = String(dur || 1);
+    slider.disabled = !dur;
+    if (!this._seeking) {
+      slider.value = String(Math.min(dur, this._remuxPos()));
+      ui.querySelector('.rxt').textContent = this._clock(this._remuxPos());
+    }
+    ui.querySelector('.rxd').textContent = dur ? this._clock(dur) : '';
+    ui.querySelector('.rxp ha-icon').setAttribute('icon', v.paused ? 'mdi:play' : 'mdi:pause');
+    ui.querySelector('.rxp').setAttribute('aria-label', this._t(v.paused ? 'play' : 'pause'));
+    ui.querySelector('.rxm ha-icon').setAttribute('icon', v.muted ? 'mdi:volume-off' : 'mdi:volume-high');
+  }
+
+  // audio language for remuxed films (the server picks the track)
+  _paintAudio() {
+    const wrap = this.querySelector('.auw');
+    const sel = this.querySelector('.au');
+    if (!wrap || !sel) return;
+    const tracks = (this._remux && this._remux.tracks) || [];
+    wrap.hidden = tracks.length < 2;
+    if (wrap.hidden) { sel.innerHTML = ''; return; }
+    sel.innerHTML = tracks.map((t, i) => {
+      const label = [t.language && t.language.toUpperCase(), t.title, t.codec && `${t.codec}${t.channels ? ` ${t.channels}ch` : ''}`].filter(Boolean).join(' · ');
+      return `<option value="${i}"${i === this._remux.audio ? ' selected' : ''}>${this._esc(label || `#${i + 1}`)}</option>`;
+    }).join('');
+  }
+
   // subtitles: hls.js tracks when the HLS version has them, otherwise the <video>'s text tracks
   // (external files from the provider, or tracks the browser reads from the file itself)
   _subTracks() {
@@ -709,7 +839,7 @@ class TvChannelsCard extends HTMLElement {
   }
 
   _paintSubs() {
-    const wrap = this.querySelector('.ccw');
+    const wrap = this.querySelector('.cct');
     const sel = this.querySelector('.cc');
     if (!wrap || !sel) return;
     const tracks = this._current && this._current.vod ? this._subTracks() : [];
@@ -753,6 +883,9 @@ class TvChannelsCard extends HTMLElement {
 
   _stop(silent) {
     this._subAuto = false;
+    this._remux = null;
+    this._seeking = false;
+    if (this._screen) this._screen.querySelectorAll('.rx, .unmute').forEach((el) => el.remove());
     this._hlsToken = (this._hlsToken || 0) + 1;
     if (this._hls) { try { this._hls.destroy(); } catch (e) { /* already gone */ } this._hls = null; }
     if (this._player) {
@@ -762,6 +895,7 @@ class TvChannelsCard extends HTMLElement {
       this._player = null;
     }
     this._paintSubs();
+    this._paintAudio();
     if (this._current) {
       this._current = null;
       if (!silent && this._built) this._render();
