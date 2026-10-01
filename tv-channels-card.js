@@ -1,6 +1,6 @@
 // tv-channels-card: IPTV channel tiles, an HLS player and a programme guide for Home Assistant.
 // Works with the iptv_proxy integration (https://github.com/ohnoitsfraa/iptv_proxy).
-const VERSION = '1.1.1';
+const VERSION = '1.2.0';
 
 const I18N = {
   en: {
@@ -9,7 +9,9 @@ const I18N = {
     blockedText: 'This channel is served over http. Open Home Assistant via its local http address, or allow <code>Insecure content</code> for this site in Chrome.',
     noProxy: 'could not get access to the proxy', noHls: 'hls.js could not be loaded',
     unsupported: 'HLS is not supported in this browser', unavailable: 'stream unavailable',
-    search: 'Search', searchPh: 'Search channels or programmes…', resChannels: 'Channels', resProgrammes: 'Programmes',
+    search: 'Search', searchPh: 'Search channels, programmes, movies or series…', resChannels: 'Channels', resProgrammes: 'Programmes',
+    resMovies: 'Movies', resSeries: 'Series', back: 'Back', season: 'Season', loadingEps: 'Loading episodes…',
+    subs: 'Subtitles', subsOff: 'Subtitles off', min: 'min',
     noResults: 'Nothing found', searching: 'Searching…', live: 'Live', today: 'Today',
   },
   nl: {
@@ -18,7 +20,9 @@ const I18N = {
     blockedText: 'Dit kanaal komt via http binnen. Open Home Assistant via het lokale http-adres, of sta in Chrome <code>Onveilige content</code> toe voor deze site.',
     noProxy: 'kon geen toegang tot de proxy krijgen', noHls: 'hls.js kon niet geladen worden',
     unsupported: 'HLS niet ondersteund in deze browser', unavailable: 'stream niet beschikbaar',
-    search: 'Zoeken', searchPh: 'Zoek zenders of programma’s…', resChannels: 'Zenders', resProgrammes: 'Programma’s',
+    search: 'Zoeken', searchPh: 'Zoek zenders, programma’s, films of series…', resChannels: 'Zenders', resProgrammes: 'Programma’s',
+    resMovies: 'Films', resSeries: 'Series', back: 'Terug', season: 'Seizoen', loadingEps: 'Afleveringen laden…',
+    subs: 'Ondertitels', subsOff: 'Ondertitels uit', min: 'min',
     noResults: 'Niets gevonden', searching: 'Zoeken…', live: 'Live', today: 'Vandaag',
   },
 };
@@ -103,6 +107,7 @@ class TvChannelsCard extends HTMLElement {
 
   async _signLogo(l) {
     this._logos = this._logos || {};
+    if (/^https:\/\//i.test(l)) return l; // already loads fine on an https page
     if (!(l in this._logos)) {
       // some providers hand out already percent-encoded logo URLs; encoding those twice breaks the path signature
       let u = l;
@@ -139,7 +144,7 @@ class TvChannelsCard extends HTMLElement {
       this._paintEpg();
     } catch (e) { /* guide is optional */ }
     const cur = this._current;
-    if (cur) {
+    if (cur && !cur.vod) {
       try {
         const res = await this._hass.callApi('GET', `${this._apiBase()}/epg?ids=${cur.id}&full=1`);
         if (this._current === cur) { this._guide = (res || {})[cur.id] || []; this._paintGuide(); }
@@ -175,6 +180,14 @@ class TvChannelsCard extends HTMLElement {
   _paintGuide() {
     const box = this.querySelector('.guide');
     if (!box) return;
+    const vod = this._current && this._current.vod;
+    if (vod) {
+      const meta = [vod.year, vod.minutes ? `${vod.minutes} ${this._t('min')}` : '', vod.genre].filter(Boolean).join(' · ');
+      box.hidden = !vod.plot && !meta;
+      box.innerHTML = box.hidden ? '' : `<div class="gnow"><div class="gh"><span class="gt">${this._esc(vod.title || this._current.name)}</span><span class="gtime">${this._esc(meta)}</span></div>
+        ${vod.plot ? `<div class="gdesc">${this._esc(vod.plot)}</div>` : ''}</div>`;
+      return;
+    }
     const list = this._current ? (this._guide || []) : [];
     const now = Date.now() / 1000;
     const cur = this._nowOf(list);
@@ -212,12 +225,14 @@ class TvChannelsCard extends HTMLElement {
     if (q.length < 2) { out.innerHTML = ''; return; }
     out.innerHTML = `<div class="rmsg">${this._t('searching')}</div>`;
     const enc = encodeURIComponent(q);
-    const [chans, progs] = await Promise.all([
+    const [chans, progs, lib] = await Promise.all([
       this._hass.callApi('GET', `${this._apiBase()}/streams?q=${enc}&limit=24`).catch(() => []),
       this._epgOn() ? this._hass.callApi('GET', `${this._apiBase()}/search?q=${enc}&ids=${this._searchIds()}`).catch(() => []) : [],
+      this._config.vod !== false ? this._hass.callApi('GET', `${this._apiBase()}/library?q=${enc}&limit=16`).catch(() => ({})) : {},
     ]);
     if (token !== this._searchToken) return;
-    this._results = { chans: chans || [], progs: progs || [] };
+    this._series = null;
+    this._results = { chans: chans || [], progs: progs || [], movies: (lib && lib.movies) || [], series: (lib && lib.series) || [] };
     this._paintResults();
   }
 
@@ -227,10 +242,17 @@ class TvChannelsCard extends HTMLElement {
     return d.toLocaleDateString(this._lang() === 'nl' ? 'nl-NL' : undefined, { weekday: 'short', day: 'numeric', month: 'short' });
   }
 
+  _resRow(k, logo, name, sub) {
+    return `<button class="ri" data-k="${k}"><span class="rlogo">${logo ? `<img alt="" data-logo="${this._esc(logo)}" referrerpolicy="no-referrer">` : ''}</span>
+          <span class="rt"><span class="rn">${this._esc(name)}</span><span class="rs">${this._esc(sub)}</span></span></button>`;
+  }
+
   _paintResults() {
+    if (this._series) { this._paintSeries(); return; }
     const out = this.querySelector('.results');
-    const { chans, progs } = this._results || { chans: [], progs: [] };
-    if (!chans.length && !progs.length) { out.innerHTML = `<div class="rmsg">${this._t('noResults')}</div>`; return; }
+    const { chans, progs, movies, series } = this._results || { chans: [], progs: [], movies: [], series: [] };
+    if (!chans.length && !progs.length && !movies.length && !series.length) { out.innerHTML = `<div class="rmsg">${this._t('noResults')}</div>`; return; }
+    const sec = (label, rows) => (rows.length ? `<div class="rsec"><span class="lbl">${label}</span>${rows.join('')}</div>` : '');
     const byId = Object.fromEntries(this._config.channels.map((c) => [c.id, c]));
     out.innerHTML = (chans.length ? `<div class="rsec"><span class="lbl">${this._t('resChannels')}</span>${chans.map((c, i) => `
         <button class="ri" data-k="c${i}"><span class="rlogo">${c.logo ? `<img alt="" data-logo="${this._esc(c.logo)}" referrerpolicy="no-referrer">` : ''}</span>
@@ -240,15 +262,68 @@ class TvChannelsCard extends HTMLElement {
         return `<button class="ri${p.live ? '' : ' later'}" data-k="p${i}"${p.live ? '' : ' disabled'}>
           <span class="rwhen">${p.live ? `<span class="rlive">${this._t('live')}</span>` : `<span>${this._esc(this._day(p.start))}</span>`}<span class="gtime">${this._fmt(p.start)}</span></span>
           <span class="rt"><span class="rn">${this._esc(p.title)}</span><span class="rs">${this._esc(ch ? ch.name : p.id)}</span></span></button>`;
-      }).join('')}</div>` : '');
+      }).join('')}</div>` : '')
+      + sec(this._t('resMovies'), movies.map((m, i) => this._resRow(`m${i}`, m.logo, m.name, [m.year, m.group].filter(Boolean).join(' · '))))
+      + sec(this._t('resSeries'), series.map((m, i) => this._resRow(`s${i}`, m.logo, m.name, [m.year, m.group].filter(Boolean).join(' · '))));
+    this._loadResultLogos(out);
+  }
+
+  _loadResultLogos(out) {
     out.querySelectorAll('img[data-logo]').forEach(async (img) => {
       const src = await this._signLogo(img.dataset.logo);
       if (src) img.src = src; else img.remove();
     });
   }
 
+  async _openSeries(item) {
+    const token = (this._searchToken = (this._searchToken || 0) + 1);
+    this._series = { item, info: null, season: null };
+    this._paintSeries();
+    let info = null;
+    try { info = await this._hass.callApi('GET', `${this._apiBase()}/series/${encodeURIComponent(item.id)}`); } catch (e) { /* shown as empty */ }
+    if (token !== this._searchToken || !this._series) return;
+    this._series.info = info || { seasons: [] };
+    this._series.season = this._series.info.seasons.length ? this._series.info.seasons[0].season : null;
+    this._paintSeries();
+  }
+
+  _paintSeries() {
+    const out = this.querySelector('.results');
+    const { item, info, season } = this._series;
+    const head = `<div class="shead"><button class="btn sback"><ha-icon icon="mdi:arrow-left"></ha-icon>${this._t('back')}</button>
+      <span class="rt"><span class="rn">${this._esc(item.name)}</span><span class="rs">${this._esc([info && info.year, item.group].filter(Boolean).join(' · '))}</span></span></div>`;
+    if (!info) { out.innerHTML = `<div class="rsec wide">${head}<div class="rmsg">${this._t('loadingEps')}</div></div>`; return; }
+    const cur = info.seasons.find((x) => x.season === season);
+    const tabs = info.seasons.length > 1 ? `<div class="stabs">${info.seasons.map((x) => `<button class="tab ${x.season === season ? 'on' : ''}" data-season="${x.season}">${this._t('season')} ${x.season}</button>`).join('')}</div>` : '';
+    const eps = cur ? cur.episodes.map((e, i) => `<button class="ri" data-k="e${i}"><span class="rwhen"><span class="gtime">E${e.ep || i + 1}</span>${e.minutes ? `<span>${e.minutes} ${this._t('min')}</span>` : ''}</span>
+        <span class="rt"><span class="rn">${this._esc(e.title || `${this._t('season')} ${season} · E${e.ep || i + 1}`)}</span>${e.plot ? `<span class="rs">${this._esc(e.plot)}</span>` : ''}</span></button>`).join('') : `<div class="rmsg">${this._t('noResults')}</div>`;
+    out.innerHTML = `<div class="rsec wide">${head}${tabs}${eps}</div>`;
+  }
+
   _pickResult(k) {
-    const { chans, progs } = this._results || {};
+    const { chans, progs, movies, series } = this._results || {};
+    if (k[0] === 'm' && movies) {
+      const m = movies[+k.slice(1)];
+      if (m) { this._toggleSearch(false); this._playVod({ kind: 'movie', id: m.id, name: m.name, ext: m.ext }); }
+      return;
+    }
+    if (k[0] === 's' && series) {
+      const m = series[+k.slice(1)];
+      if (m) this._openSeries(m);
+      return;
+    }
+    if (k[0] === 'e' && this._series && this._series.info) {
+      const { item, info, season } = this._series;
+      const cur = info.seasons.find((x) => x.season === season);
+      const e = cur && cur.episodes[+k.slice(1)];
+      if (!e) return;
+      this._toggleSearch(false);
+      this._playVod({
+        kind: 'episode', id: e.id, ext: e.ext, name: `${item.name} · S${season}E${e.ep}`,
+        info: { title: e.title || `${item.name} · S${season}E${e.ep}`, plot: e.plot || info.plot, minutes: e.minutes, year: info.year, subtitles: e.subtitles },
+      });
+      return;
+    }
     let ch = null;
     if (k[0] === 'c' && chans) {
       const c = chans[+k.slice(1)];
@@ -352,12 +427,20 @@ class TvChannelsCard extends HTMLElement {
         .rt { display: flex; flex-direction: column; min-width: 0; }
         .rn { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .rs { font-size: 11px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .rsec.wide { grid-column: 1 / -1; gap: 8px; }
+        .shead { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .stabs { display: flex; gap: 6px; flex-wrap: wrap; }
+        .ccw { position: relative; padding: 7px 9px; }
+        .ccw[hidden] { display: none; }
+        .ccw select { position: absolute; inset: 0; opacity: 0; cursor: pointer; font: inherit; }
+        .ccw.on { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 16%, transparent); }
       </style>
       <div class="tv">
         <div class="screen"><div class="idle"></div></div>
         <div class="bar">
           <div class="now"><span class="dot"></span><span class="lbl">${this._t('now')}</span><span class="nm">—</span></div>
           ${this._config.proxy ? `<button class="btn find" title="${this._t('search')}" aria-label="${this._t('search')}"><ha-icon icon="mdi:magnify"></ha-icon></button>` : ''}
+          <label class="btn ccw" hidden title="${this._t('subs')}"><ha-icon icon="mdi:subtitles-outline"></ha-icon><select class="cc" aria-label="${this._t('subs')}"></select></label>
           <button class="btn stop" hidden><ha-icon icon="mdi:stop"></ha-icon>${this._t('stop')}</button>
         </div>
         <div class="guide" hidden></div>
@@ -371,6 +454,7 @@ class TvChannelsCard extends HTMLElement {
     this._screen = this.querySelector('.screen');
     this._idle = this.querySelector('.idle');
     this.querySelector('.stop').addEventListener('click', () => this._stop());
+    this.querySelector('.cc').addEventListener('change', (ev) => this._pickSub(ev.target.value, true));
     if (this._config.proxy) {
       this.querySelector('.find').addEventListener('click', () => this._toggleSearch());
       const input = this.querySelector('.search input');
@@ -383,6 +467,9 @@ class TvChannelsCard extends HTMLElement {
         if (ev.key === 'Enter') { clearTimeout(this._searchTimer); this._search(input.value); }
       });
       this.querySelector('.results').addEventListener('click', (ev) => {
+        if (ev.target.closest('.sback')) { this._series = null; this._paintResults(); return; }
+        const st = ev.target.closest('[data-season]');
+        if (st && this._series) { this._series.season = +st.dataset.season; this._paintSeries(); return; }
         const r = ev.target.closest('.ri');
         if (r && !r.disabled) this._pickResult(r.dataset.k);
       });
@@ -424,7 +511,7 @@ class TvChannelsCard extends HTMLElement {
     this._paintGuide();
     const cur = this._current;
     this.querySelector('.now .nm').textContent = cur ? cur.name : '—';
-    this.querySelector('.dot').classList.toggle('live', !!cur);
+    this.querySelector('.dot').classList.toggle('live', !!cur && !cur.vod);
     this.querySelector('.stop').hidden = !cur;
     this._idle.hidden = !!cur;
     this._idle.innerHTML = `<ha-icon icon="mdi:television-classic"></ha-icon><span class="t">${this._t('pick')}</span>`;
@@ -495,7 +582,148 @@ class TvChannelsCard extends HTMLElement {
     hls.attachMedia(video);
   }
 
+  // films and episodes: GET <proxy>/vod/<kind>/<id>.<ext> (seekable file) or .m3u8 (HLS, when the provider has it)
+  async _playVod(item) {
+    this._stop(true);
+    const token = (this._hlsToken = (this._hlsToken || 0) + 1);
+    const cur = { id: `${item.kind}:${item.id}`, name: item.name, vod: { title: item.name, ...(item.info || {}) } };
+    const video = document.createElement('video');
+    Object.assign(video, { controls: true, autoplay: true, playsInline: true, crossOrigin: 'anonymous' });
+    video.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000';
+    this._screen.appendChild(video);
+    this._player = video;
+    this._current = cur;
+    this._render();
+
+    let info = item.info || null;
+    if (!info && item.kind === 'movie') {
+      try { info = await this._hass.callApi('GET', `${this._apiBase()}/movie/${encodeURIComponent(item.id)}`); } catch (e) { info = null; }
+      if (token !== this._hlsToken) return;
+      if (info) { cur.vod = { ...cur.vod, ...info, title: info.name || item.name }; this._paintGuide(); }
+    }
+    const ext = (info && info.ext) || item.ext || 'mp4';
+    const base = `${this._config.proxy}/vod/${item.kind}/${encodeURIComponent(item.id)}`;
+    const native = ['mp4', 'm4v', 'webm', 'mov'].includes(ext);
+    const order = native ? ['file', 'hls'] : ['hls', 'file'];
+
+    for (const sub of (info && info.subtitles) || []) {
+      try {
+        const track = document.createElement('track');
+        Object.assign(track, { kind: 'subtitles', label: sub.lang, srclang: String(sub.lang).slice(0, 2).toLowerCase() });
+        track.src = await this._sign(`${this._config.proxy}/sub?u=${encodeURIComponent(sub.url)}`, 12 * 3600);
+        video.appendChild(track);
+      } catch (e) { /* skip this subtitle */ }
+    }
+    if (token !== this._hlsToken) return;
+    video.textTracks.addEventListener('addtrack', () => this._paintSubs());
+    video.textTracks.addEventListener('removetrack', () => this._paintSubs());
+    video.addEventListener('loadedmetadata', () => this._paintSubs());
+
+    const fail = (reason) => {
+      if (token !== this._hlsToken) return;
+      this._stop(true);
+      this._current = cur;
+      this._render();
+      this._idle.hidden = false;
+      this._idle.innerHTML = `<ha-icon icon="mdi:alert-outline"></ha-icon><span class="t">${this._t('failed')}</span><span>${this._esc(reason || '')}</span>`;
+    };
+    const start = () => video.play().catch(() => { video.muted = true; video.play().catch(() => {}); });
+    const tryNext = async (i, lastReason) => {
+      if (token !== this._hlsToken) return;
+      if (i >= order.length) { fail(lastReason || this._t('unavailable')); return; }
+      if (this._hls) { try { this._hls.destroy(); } catch (e) { /* gone */ } this._hls = null; }
+      let url;
+      try { url = await this._sign(`${base}.${order[i] === 'hls' ? 'm3u8' : ext}`, 12 * 3600); } catch (e) { fail(this._t('noProxy')); return; }
+      if (token !== this._hlsToken) return;
+      if (order[i] === 'file' || (video.canPlayType('application/vnd.apple.mpegurl') && !window.MediaSource)) {
+        video.addEventListener('error', () => tryNext(i + 1, this._t('unavailable')), { once: true });
+        video.src = url;
+        start();
+        return;
+      }
+      let Hls;
+      try {
+        Hls = window.Hls || (await import(this._config.hls_js || 'https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.mjs')).default;
+      } catch (e) { tryNext(i + 1, this._t('noHls')); return; }
+      if (token !== this._hlsToken || this._player !== video) return;
+      if (!Hls.isSupported()) { tryNext(i + 1, this._t('unsupported')); return; }
+      const hls = new Hls({ maxBufferLength: 60, backBufferLength: 60, enableWorker: true });
+      this._hls = hls;
+      let started = false;
+      let retried = false;
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { started = true; start(); });
+      hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => this._paintSubs());
+      hls.on(Hls.Events.SUBTITLE_TRACK_SWITCH, () => this._paintSubs());
+      hls.on(Hls.Events.ERROR, (_e, d) => {
+        if (!d.fatal) return;
+        if (!started) { tryNext(i + 1, d.details); return; } // no HLS version: fall back to the file
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR && !retried) { retried = true; hls.recoverMediaError(); return; }
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR && !retried) { retried = true; hls.startLoad(); return; }
+        fail(d.details);
+      });
+      hls.loadSource(url);
+      hls.attachMedia(video);
+    };
+    tryNext(0);
+  }
+
+  // subtitles: hls.js tracks when the HLS version has them, otherwise the <video>'s text tracks
+  // (external files from the provider, or tracks the browser reads from the file itself)
+  _subTracks() {
+    const v = this._player;
+    if (!v) return [];
+    if (this._hls && this._hls.subtitleTracks && this._hls.subtitleTracks.length) {
+      return this._hls.subtitleTracks.map((t, i) => ({ key: `h${i}`, label: t.name || t.lang || `#${i + 1}`, lang: t.lang || '', on: this._hls.subtitleTrack === i }));
+    }
+    return [...v.textTracks].map((t, i) => ({ t, i })).filter(({ t }) => t.kind === 'subtitles' || t.kind === 'captions')
+      .map(({ t, i }) => ({ key: `t${i}`, label: t.label || t.language || `#${i + 1}`, lang: t.language || '', on: t.mode === 'showing' }));
+  }
+
+  _paintSubs() {
+    const wrap = this.querySelector('.ccw');
+    const sel = this.querySelector('.cc');
+    if (!wrap || !sel) return;
+    const tracks = this._current && this._current.vod ? this._subTracks() : [];
+    wrap.hidden = !tracks.length;
+    if (!tracks.length) { sel.innerHTML = ''; wrap.classList.remove('on'); return; }
+    // apply the last chosen language once per playback
+    if (!this._subAuto) {
+      this._subAuto = true;
+      let pref = null;
+      try { pref = localStorage.getItem('tv-channels-card:sub'); } catch (e) { /* storage blocked */ }
+      const m = pref && tracks.find((t) => (t.lang || t.label).toLowerCase() === pref);
+      if (m && !m.on) { this._pickSub(m.key, false); return; }
+    }
+    const on = tracks.find((t) => t.on);
+    sel.innerHTML = `<option value="">${this._t('subsOff')}</option>` + tracks.map((t) => `<option value="${t.key}"${t.on ? ' selected' : ''}>${this._esc(t.label)}</option>`).join('');
+    wrap.classList.toggle('on', !!on);
+    wrap.title = on ? `${this._t('subs')}: ${on.label}` : this._t('subs');
+  }
+
+  _pickSub(key, remember) {
+    const v = this._player;
+    if (!v) return;
+    const tracks = this._subTracks();
+    const pick = tracks.find((t) => t.key === key);
+    if (this._hls && key[0] === 'h') {
+      this._hls.subtitleDisplay = true;
+      this._hls.subtitleTrack = +key.slice(1);
+    } else if (this._hls && !key && this._hls.subtitleTracks && this._hls.subtitleTracks.length) {
+      this._hls.subtitleTrack = -1;
+    } else {
+      [...v.textTracks].forEach((t, i) => { if (t.kind === 'subtitles' || t.kind === 'captions') t.mode = key === `t${i}` ? 'showing' : 'disabled'; });
+    }
+    if (remember) {
+      try {
+        if (pick) localStorage.setItem('tv-channels-card:sub', (pick.lang || pick.label).toLowerCase());
+        else localStorage.removeItem('tv-channels-card:sub');
+      } catch (e) { /* storage blocked */ }
+    }
+    setTimeout(() => this._paintSubs(), 0);
+  }
+
   _stop(silent) {
+    this._subAuto = false;
     this._hlsToken = (this._hlsToken || 0) + 1;
     if (this._hls) { try { this._hls.destroy(); } catch (e) { /* already gone */ } this._hls = null; }
     if (this._player) {
@@ -504,6 +732,7 @@ class TvChannelsCard extends HTMLElement {
       this._player.remove();
       this._player = null;
     }
+    this._paintSubs();
     if (this._current) {
       this._current = null;
       if (!silent && this._built) this._render();

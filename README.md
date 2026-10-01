@@ -6,6 +6,8 @@ A Home Assistant dashboard card for watching IPTV: channel tiles in tabs, one HL
 - **One player**: hls.js, or native HLS on Safari/iOS. Only one stream runs at a time, which helps with provider connection limits.
 - **Programme guide**: what's on now with a progress bar on every tile, and the current programme, its description and the next three programmes below the player.
 - **Search**: the magnifier button searches all of your provider's channels by name and the guide of your configured channels by programme title. Tap a channel, or a programme that's on now, to start watching. Needs IPTV Proxy 1.2.0 or newer.
+- **Films and series**: search results also list your provider's films and series. A series opens its seasons and episodes. Playback uses the provider's HLS version when there is one, and otherwise the file itself, so you can seek. Needs IPTV Proxy 1.3.0 or newer.
+- **Subtitles**: when a film or episode has subtitles the browser can show, a subtitles button appears next to Stop. Your last choice of language is remembered.
 - **Stops by itself** when the pop-up it lives in closes, or when the card leaves the page.
 - **Theme-aware**: it uses your theme's colours in light and dark mode, and has one configurable accent colour.
 - **English and Dutch** texts, following your Home Assistant language.
@@ -57,6 +59,7 @@ channels:
 | `hash` | `#tv` | URL hash of the pop-up the card lives in, e.g. a Bubble Card pop-up. Playback stops when the hash changes, and the guide only refreshes while it matches. Set it to `''` when the card sits directly on a view. |
 | `accent` | `#a78bfa` | Accent colour: active tile, progress bars and the idle screen. |
 | `epg` | `true` | Set to `false` to hide the programme guide. |
+| `vod` | `true` | Set to `false` to leave films and series out of search. |
 | `language` | Home Assistant language | `en` or `nl`. |
 | `hls_js` | jsDelivr hls.js 1.7.3 | URL of the hls.js ES module, if you want to host it yourself. |
 
