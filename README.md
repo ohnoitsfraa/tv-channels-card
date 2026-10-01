@@ -7,6 +7,7 @@ A Home Assistant dashboard card for watching IPTV: channel tiles in tabs, one HL
 - **Programme guide**: what's on now with a progress bar on every tile, and the current programme, its description and the next three programmes below the player.
 - **Search**: the magnifier button searches all of your provider's channels by name and the guide of your configured channels by programme title. Tap a channel, or a programme that's on now, to start watching. Needs IPTV Proxy 1.2.0 or newer.
 - **Films and series**: search results also list your provider's films and series. A series opens its seasons and episodes. Playback uses the provider's HLS version when there is one, and otherwise the file itself, so you can seek. Needs IPTV Proxy 1.3.0 or newer.
+- **Back to results**: after picking something from the search results, a "Results" button brings you back to the same results (and scroll position) without searching again.
 - **Subtitles**: when a film or episode has subtitles the browser can show, a subtitles button appears next to Stop. Your last choice of language is remembered.
 - **Stops by itself** when the pop-up it lives in closes, or when the card leaves the page.
 - **Theme-aware**: it uses your theme's colours in light and dark mode, and has one configurable accent colour.
